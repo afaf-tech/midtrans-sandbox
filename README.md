@@ -86,6 +86,32 @@ Pas ada perubahan status, console bakal nampilin:
 
 Webhook yang signature-nya gak cocok bakal di-ignore (`🚫 webhook DITOLAK`).
 
+## Docker Compose
+
+Alternatif jalanin tanpa install Node.js lokal (butuh [Docker Desktop](https://www.docker.com/products/docker-desktop/)):
+
+```bash
+make docker-up      # atau: docker compose up -d --build
+```
+
+App jalan di http://localhost:3000, data transaksi tersimpan persistent di `./data`.
+
+### Static domain pakai Cloudflare Tunnel (opsional)
+
+Kalau mau webhook pakai **domain sendiri** (bukan `*.trycloudflare.com` random):
+
+1. Bikin tunnel di [Cloudflare Zero Trust](https://one.dash.cloudflare.com) → **Networks → Tunnels → Create a tunnel** → pilih **Cloudflared** → copy **token**-nya.
+2. Di dashboard, set **public hostname**: domain kamu → service `http://app:3000`.
+3. Tambah token ke `.env`:
+   ```
+   CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...
+   ```
+4. Jalanin dengan profile tunnel:
+   ```bash
+   make docker-up-tunnel   # atau: docker compose --profile tunnel up -d
+   ```
+5. Set **Payment Notification URL** Midtrans ke `https://<domain-kamu>/notification`.
+
 ## Struktur proyek
 
 ```
@@ -95,7 +121,9 @@ Webhook yang signature-nya gak cocok bakal di-ignore (`🚫 webhook DITOLAK`).
 ├── public/index.html   # frontend statis
 ├── data/               # transaksi.json (auto, di-ignore git)
 ├── .env.example        # template key
-├── Makefile            # shortcut: setup / run / dev / clean
+├── Makefile            # shortcut: setup / run / dev / clean / docker-*
+├── Dockerfile          # image Node.js buat Docker
+├── docker-compose.yml  # app + cloudflared (profile "tunnel")
 └── CLAUDE.md           # panduan buat Claude Code
 ```
 
