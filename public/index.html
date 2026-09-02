@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QRIS Sandbox — Kirim Duit</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    main {
+      width: 100%;
+      max-width: 420px;
+    }
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 20px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 8px; }
+    input, select {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 1.1rem;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 13px;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #052e16;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .url-row { display: flex; gap: 8px; margin-bottom: 14px; }
+    #sim-url { flex: 1; font-size: 0.8rem; margin-bottom: 0; padding: 10px; }
+    #copy-btn { width: auto; padding: 10px 16px; font-size: 0.85rem; }
+    #qr-section { text-align: center; }
+    #qr-img {
+      width: 260px;
+      height: 260px;
+      background: #fff;
+      border-radius: 12px;
+      padding: 8px;
+    }
+    .muted { color: var(--muted); font-size: 0.75rem; word-break: break-all; }
+    #status { font-weight: 600; margin-top: 12px; }
+    .hint { color: var(--muted); font-size: 0.8rem; }
+    h2 { font-size: 1.05rem; margin: 0 0 12px; }
+    .history { list-style: none; padding: 0; margin: 0; }
+    .history-item { padding: 10px 0; border-bottom: 1px solid #334155; }
+    .history-item:last-child { border-bottom: none; }
+    .row { display: flex; justify-content: space-between; align-items: center; }
+    .amount { font-weight: 700; }
+    .badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 999px; }
+    .badge.ok { background: #14532d; color: #86efac; }
+    .badge.pending { background: #422006; color: #fbbf24; }
+    .badge.fail { background: #450a0a; color: #fca5a5; }
+    .meta { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+    .empty { color: var(--muted); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Kirim Duit via QRIS</h1>
+      <form id="pay-form">
+        <label for="amount">Nominal (Rp)</label>
+        <input id="amount" type="number" min="1000" step="500" value="10000" required>
+        <label for="ewallet">E-wallet yang dipakai scan</label>
+        <select id="ewallet">
+          <option value="gopay">GoPay</option>
+          <option value="airpay shopee">ShopeePay</option>
+        </select>
+        <button type="submit" id="submit-btn">Buat QR Code</button>
+      </form>
+    </div>
+
+    <div class="card" id="qr-section" hidden>
+      <img id="qr-img" alt="QRIS QR code">
+      <p class="muted" id="qr-string"></p>
+      <div class="url-row">
+        <input id="sim-url" type="text" readonly onclick="this.select()" placeholder="QR Code Image Url…">
+        <button type="button" id="copy-btn">Copy</button>
+      </div>
+      <p class="hint">Untuk simulasi: copy URL di atas → buka <b>simulator.sandbox.midtrans.com/v2/qris</b> → tempel ke "QR Code Image Url" → klik <b>Scan QR</b>.</p>
+      <p id="status">Status: menunggu pembayaran…</p>
+    </div>
+
+    <div class="card">
+      <h2>Riwayat Transaksi</h2>
+      <ul id="history" class="history"></ul>
+    </div>
+  </main>
+
+  <script>
+    const form = document.getElementById('pay-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const amountInput = document.getElementById('amount');
+    const qrSection = document.getElementById('qr-section');
+    const qrImg = document.getElementById('qr-img');
+    const qrStringEl = document.getElementById('qr-string');
+    const statusEl = document.getElementById('status');
+    const simUrlInput = document.getElementById('sim-url');
+    const copyBtn = document.getElementById('copy-btn');
+    const historyEl = document.getElementById('history');
+
+    const TERMINAL_SUCCESS = ['settlement', 'capture'];
+    const TERMINAL_FAILURE = ['expire', 'deny', 'cancel', 'failure', 'refund'];
+    let pollTimer;
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Membuat QR…';
+      qrSection.hidden = true;
+      clearInterval(pollTimer);
+
+      try {
+        const res = await fetch('/charge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: Number(amountInput.value),
+            acquirer: document.getElementById('ewallet').value,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          statusEl.textContent = 'Error: ' + (data.error || res.status);
+          qrSection.hidden = false;
+          qrImg.src = '';
+          qrStringEl.textContent = '';
+          return;
+        }
+
+        qrImg.src = data.qr_data_url;
+        qrStringEl.textContent = data.qr_string;
+        simUrlInput.value = data.qr_code_url || '';
+        statusEl.textContent = 'Status: menunggu pembayaran…';
+        qrSection.hidden = false;
+        loadHistory();
+        startPolling(data.order_id);
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+        qrSection.hidden = false;
+        qrImg.src = '';
+        qrStringEl.textContent = '';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Buat QR Code';
+      }
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(simUrlInput.value);
+        copyBtn.textContent = 'Tersalin!';
+      } catch {
+        simUrlInput.select();
+        document.execCommand('copy');
+      }
+      setTimeout(() => (copyBtn.textContent = 'Copy'), 1500);
+    });
+
+    function formatRupiah(n) {
+      return 'Rp ' + Number(n).toLocaleString('id-ID');
+    }
+
+    function statusBadge(status) {
+      if (['settlement', 'capture'].includes(status)) return ['✅ sukses', 'ok'];
+      if (status === 'pending') return ['⏳ pending', 'pending'];
+      return ['❌ ' + status, 'fail'];
+    }
+
+    async function loadHistory() {
+      try {
+        const res = await fetch('/transactions');
+        const list = await res.json();
+        historyEl.innerHTML = '';
+        if (!list.length) {
+          historyEl.innerHTML = '<li class="empty">Belum ada transaksi.</li>';
+          return;
+        }
+        for (const t of list) {
+          const [label, cls] = statusBadge(t.status);
+          const li = document.createElement('li');
+          li.className = 'history-item';
+          li.innerHTML =
+            '<div class="row"><span class="amount">' + formatRupiah(t.gross_amount) + '</span>' +
+            '<span class="badge ' + cls + '">' + label + '</span></div>' +
+            '<div class="meta">' + (t.acquirer || t.payment_type || 'qris') + ' · ' + t.order_id + '</div>' +
+            '<div class="meta">' + new Date(t.created_at).toLocaleString('id-ID') + '</div>';
+          historyEl.appendChild(li);
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }
+
+    function startPolling(orderId) {
+      clearInterval(pollTimer);
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch('/status/' + orderId);
+          const data = await res.json();
+          const status = data.transaction_status;
+          if (!status) return;
+          if (TERMINAL_SUCCESS.includes(status)) {
+            statusEl.textContent = '✅ Pembayaran sukses!';
+            clearInterval(pollTimer);
+            loadHistory();
+          } else if (TERMINAL_FAILURE.includes(status)) {
+            statusEl.textContent = '❌ Transaksi ' + status;
+            clearInterval(pollTimer);
+            loadHistory();
+          } else {
+            statusEl.textContent = 'Status: ' + status;
+          }
+        } catch (err) {
+          // transient network error — keep polling
+        }
+      }, 3000);
+    }
+
+    loadHistory();
+  </script>
+</body>
+</html>
