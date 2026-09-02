@@ -13,6 +13,7 @@ Stack: Node.js + Express backend, static HTML/JS frontend (no build step), `midt
 - `npm install` — install dependencies
 - `npm start` — run the server (`node server.js`)
 - `npm run dev` — run with auto-reload (`node --watch server.js`)
+- `docker compose up -d --build` — run in Docker (add `--profile tunnel` to also start the Cloudflare Tunnel service)
 - Server listens on `http://localhost:3000` (override with `PORT`).
 
 ## Configuration
